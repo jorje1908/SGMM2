@@ -11,7 +11,8 @@ import pandas as pd
 import sys
 
 sys.path.append("/home/george/github/code/loaders")
-sys.path.append("../")
+sys.path.append("..")
+sys.path.append("../../metrics")
 
 def warn(*args, **kwargs):
     pass
@@ -31,8 +32,8 @@ np.random.seed( seed = 0)
 ###############################################################################
 
 #READING DATA SETTING COLUMNS NAMES FOR METRICS
-file1 = '/home/george/github/sparx/data/sparcs00.h5'
-file2 = '/home/george/github/sparx/data/sparcs01.h5'
+file1 = '/home/george/github/data/sparcs00.h5'
+file2 = '/home/george/github/data/sparcs01.h5'
 data, dataS, idx = loader(4000, 300, file1, file2)
 
 
@@ -54,8 +55,8 @@ columns = ['cluster', 'size', 'high_cost%','low_cost%',
 Cs = [  10 ]
 alpha = [ 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000 ]
 #alpha = [1]
-n_clusters = 4
-cv = 10
+n_clusters = 2
+cv = 2
 scoring = 'neg_log_loss'
 mcov = 'diag'
 mx_it2 = 10
@@ -64,17 +65,18 @@ warm = 0
 vrb = 0
 adaR = 1
 km = 1
-model = SupervisedGMM(  n_clusters = n_clusters, max_iter2 = mx_it2, tol = 10**(-3),
-                         max_iter = mx_it, alpha = alpha, mcov = mcov, adaR = adaR,
-                         transduction = 1, verbose = vrb, scoring = scoring,
-                         cv = cv, warm = warm, tol2 = 10**(-2) )
+model = SupervisedGMM(  n_clusters = n_clusters, EM_iter = mx_it2, tol_lg = 10**(-3),
+                         lg_iter = mx_it, alpha = alpha, mcov = mcov, adaR = adaR,
+                         transduction = 0, verbose = vrb, scoring = scoring,
+                         cv = cv, warm = warm, tol_EM = 10**(-2), C = Cs,
+                         solver = 'liblinear')
 
 #SPLIT THE DATA
 Xtrain, Xtest, ytrain, ytest = model.split( data = data.values)
 
 #FIT THE MODEL 
 start = time.time()
-model = model.fit( Xtrain = Xtrain, Xtest = Xtest, ytrain = ytrain,
+model = model.fit( Xtrain = Xtrain,  ytrain = ytrain,
                   mod = 1, kmeans = 1)
 end = time.time() - start
 print( " Algorith run in {}s".format( end ))

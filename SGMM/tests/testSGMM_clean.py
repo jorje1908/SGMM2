@@ -7,8 +7,9 @@ Created on Sat Apr  6 22:10:04 2019
 """
 
 import sys
-sys.path.append('../SGMM')
-sys.path.append('../metrics')
+sys.path.append("/home/george/github/code/loaders")
+sys.path.append("..")
+sys.path.append("../../metrics")
 
 
 import numpy as np
@@ -16,15 +17,15 @@ import pandas as pd
 
 
 
-def warn(*args, **kwargs):
-    pass
-import warnings
-warnings.warn = warn
+#def warn(*args, **kwargs):
+#    pass
 #import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+#warnings.warn = warn
+#import warnings
+#warnings.filterwarnings("ignore", category=DeprecationWarning)
 import time
 from supervisedGmm import SupervisedGMM
-from supervisedGmm_Clean import SupervisedGMM as SGMM
+
 from metricsFunctions import sgmmResults
 #from superGmmMother import superGmmMother
 from loaders2 import loader
@@ -35,8 +36,10 @@ np.random.seed( seed = 0)
 ###############################################################################
 
 #READING DATA SETTING COLUMNS NAMES FOR METRICS
-file1 = '/home/george/github/sparx/data/sparcs00.h5'
-file2 = '/home/george/github/sparx/data/sparcs01.h5'
+dat = '/home/george/github/data/'
+file1 = dat+'sparcs00.h5'
+file2 = dat+'sparcs01.h5'
+
 data, dataS, idx = loader(10000, 300, file1, file2)
 
 
@@ -56,7 +59,7 @@ columns = ['cluster', 'size', 'high_cost%','low_cost%',
 
 ##Fitting SGMM
 #alpha = [1]
-n_clusters = 4
+n_clusters = 10
 cv = 2
 scoring = 'neg_log_loss'
 mcov = 'diag'
@@ -66,23 +69,24 @@ warm = 0
 vrb = 0
 adaR = 0
 km = 1
-model1 = SupervisedGMM(  n_clusters = n_clusters, max_iter2 = mx_it2, tol = 10**(-5),
-                         max_iter = mx_it, mcov = mcov, adaR = adaR,
+parallel = 0
+parallel2 = 0
+solver = 'liblinear'
+model = SupervisedGMM(  n_clusters = n_clusters, EM_iter = mx_it2, tol_EM = 10**(-5),
+                         lg_iter = mx_it, mcov = mcov, adaR = adaR,
                          transduction = 0, verbose = vrb, scoring = scoring,
-                         cv = cv, warm = warm, tol2 = 10**(-2) )
+                         cv = cv, warm = warm, tol_lg = 10**(-2), solver = solver,
+                         parallel = parallel, parallel2 = parallel2)
 
-model = SGMM(  n_clusters = n_clusters, max_iter2 = mx_it2, tol = 10**(-5),
-                         max_iter = mx_it, mcov = mcov, adaR = adaR,
-                         transduction = 0, verbose = vrb, scoring = scoring,
-                         cv = cv, warm = warm, tol2 = 10**(-3) )
+
 
 #SPLIT THE DATA
-Xtrain, Xtest, ytrain, ytest = model1.split( data = data.values)
+Xtrain, Xtest, ytrain, ytest = model.split( data = data.values)
 
 #FIT THE MODEL 
 start = time.time()
 model = model.fit( Xtrain = Xtrain, Xtest = [], ytrain = ytrain,
-                  mod = 1, kmeans = km, simple = 1)
+                  mod = 1, kmeans = km, simple = 0, hard_cluster = 0)
 end = time.time() - start
 print( " Algorith run in {}s".format( end ))
 
@@ -91,5 +95,4 @@ probTrain = model.predict_proba( Xtrain )
 
 
 
-res = sgmmResults(model, probTest, probTrain, ytest, ytrain)
-monitor = model.monitor_
+res2 = sgmmResults(model, probTest, probTrain, ytest, ytrain)

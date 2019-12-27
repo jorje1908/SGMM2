@@ -11,11 +11,6 @@ import sys
 sys.path.append('..')
 #sys.path.append('../SGMM')
 sys.path.append('../metrics')
-sys.path.append('../loaders')
-sys.path.append('../oldCode')
-sys.path.append('../visual')
-sys.path.append('../testingCodes')
-sys.path.append('../otherModels')
 
 
 def warn(*args, **kwargs):
@@ -30,9 +25,10 @@ from sklearn.linear_model import  SGDClassifier
 from sklearn.model_selection import GridSearchCV
 from  scipy.stats import multivariate_normal
 from sklearn.cluster import KMeans
-from cvxopt import matrix
-from cvxopt.solvers import qp
+#from cvxopt import matrix
+#from cvxopt.solvers import qp
 from sklearn.linear_model import LogisticRegression
+from joblib import Parallel, delayed
 
 ####THIS CODE HAS NUMERICAL ISSUES AT THE SPARCS DATASET
 
@@ -44,15 +40,16 @@ class SupervisedGMM():
     """
     
     
-    def __init__(self, max_iter = 1000, cv = 5, mix = 0.2, 
-                 C = [1/0.001, 1/0.01, 1/0.1, 1, 1/10, 1/1000, 1/10000], 
-                 alpha = [ 0.001, 0.01, 0.1, 1, 10, 100, 1000, 10000 ],
-                 max_iter2 = 10, penalty = 'l1', scoring = 'neg_log_loss',
-                 solver = 'saga', n_clusters = 2, tol = 10**(-3 ) , 
-                 mcov = 'diag', tol2 = 10**(-3), transduction = 0, adaR = 0,
+    def __init__(self, lg_iter = 1000, cv = 5, mix = 0.2, 
+                 C = [1], 
+                 alpha = [1],
+                 EM_iter = 10, penalty = 'l1', scoring = 'neg_log_loss',
+                 solver = 'saga', n_clusters = 2, tol_EM = 10**(-3 ) , 
+                 mcov = 'diag', tol_lg = 10**(-3), transduction = 0, adaR = 0,
                  verbose = 1, warm = 0, m_sparse = 0, m_sparseL = 10**(-3),
                  m_sp_it1 = 2, m_sp_it2 = 2, m_choice = 0, 
-                 m_LR = 0.001, m_mix = 1, altern = 0, log_reg = 'LG'):
+                 m_LR = 0.001, m_mix = 1, altern = 0, log_reg = 'LG', 
+                 parallel = 1, parallel2 = 1):
         
         
         
@@ -99,6 +96,8 @@ class SupervisedGMM():
             
             log_reg: [STRING], "SGD" stochastic gradient descend,
                                "LG" Logistic Regression
+                               
+            parallel: parallelize logistic regressions
             
                 
     
@@ -116,7 +115,7 @@ class SupervisedGMM():
         self._idx2 = None
         
         #maximum number of epochs for SGD
-        self._max_iter = max_iter
+        self._max_iter = lg_iter
         #Number of Folds for Cross Validation
         self._cv = cv
         #Mixing Coefficient
@@ -126,7 +125,7 @@ class SupervisedGMM():
         #List with regularization parameters for cross validation
         self._alpha = alpha
         #Nuber of iterations of the EM algorithm
-        self._max_iter2 =  max_iter2
+        self._max_iter2 =  EM_iter
         #type of penalty for logistic regression
         self._penalty = penalty
         #type of scoring  for cross validation
@@ -135,10 +134,10 @@ class SupervisedGMM():
         self._solver = solver
         #nimber of clusters to use 
         self._n_clusters = n_clusters
-        #tolerance for the SGD agorithm
-        self._tol = tol
-        #tolerance for the membership convergence
-        self._tol2 = tol2
+        #tolerance for the EM agorithm
+        self._tol = tol_EM
+        #tolerance for the LOG REGR convergence
+        self._tol2 = tol_lg
         #variable for the type pf covariance for the gaussians
         self._mcov = mcov
         #use transuction or not
@@ -159,6 +158,8 @@ class SupervisedGMM():
         self._m_mix = m_mix
         self._altern = altern
         self._log_reg = log_reg
+        self._parallel = parallel
+        self._parallel2 = parallel2
         
         #FOR FIT INITIALIZE WITH KMEANS THE MEMBERSHIPS
         self._KMeans = None
@@ -313,7 +314,7 @@ class SupervisedGMM():
         mix = self._mix
         penalty = self._penalty
         scoring = self._scoring
-        #solver = self._solver
+        solver = self._solver
         max_iter2 = self._max_iter2
         trans = self._trans
         C = self._C
@@ -383,142 +384,147 @@ class SupervisedGMM():
         Qold = 0 #initial likelihood (if we are to calculate it)
         
         #STARTING EM ALGORITHM
-        for iter2 in np.arange( max_iter2 ): #OUTER EM ITERATIONS
-            #FITING THE L1 LOGISTIC REGRESSIONS
-            if simple == 0:
-                models, logiProb, logLogist = self.fitLogisticRegression( 
-                              n_clusters, mTrain, adaR, alpha, max_iter,
-                              tol2, Xtrain, ytrain, vb, penalty, scoring,
-                              cv, regk, ind1, indexing, logiProb, logLogist, 
-                              param_grid,  lg_regr, C,
-                                              hard_cluster = hard_cluster )
-                
-            else: #IF WE USE SIMPLE MIXTURES OF GAUSSIANS JUST FIT AT LAST ITER
-                if iter2 == ( max_iter2 - 1):
+        with Parallel(n_jobs = -1, 
+                               verbose = 0) as par:
+            for iter2 in np.arange( max_iter2 ): #OUTER EM ITERATIONS
+                #FITING THE L1 LOGISTIC REGRESSIONS
+                if simple == 0:
                     models, logiProb, logLogist = self.fitLogisticRegression( 
-                              n_clusters, mTrain, adaR, alpha, max_iter,
-                              tol2, Xtrain, ytrain, vb, penalty, scoring,
-                              cv, regk, ind1, indexing, logiProb, logLogist, 
-                              param_grid, lg_regr, C,  hard_cluster = hard_cluster )
+                                  n_clusters, mTrain, adaR, alpha, max_iter,
+                                  tol2, Xtrain, ytrain, vb, penalty, scoring,
+                                  cv, regk, ind1, indexing, logiProb, logLogist, 
+                                  param_grid,  lg_regr, C,
+                                                  hard_cluster = hard_cluster,
+                                                  solver = solver, par = par)
                     
-            #WE TAKE THE MEMBERSHIPS AND ALL THE DATA
-            #TO FIT THE GAUSSIANS USING THE EM ALGORITHM FOR GMM 
+                else: #IF WE USE SIMPLE MIXTURES OF GAUSSIANS JUST FIT AT LAST ITER
+                    if iter2 == ( max_iter2 - 1):
+                        models, logiProb, logLogist = self.fitLogisticRegression( 
+                                  n_clusters, mTrain, adaR, alpha, max_iter,
+                                  tol2, Xtrain, ytrain, vb, penalty, scoring,
+                                  cv, regk, ind1, indexing, logiProb, logLogist, 
+                                  param_grid, lg_regr, C,  hard_cluster = hard_cluster, 
+                                  solver = solver, par = par)
+                        
+                #WE TAKE THE MEMBERSHIPS AND ALL THE DATA
+                #TO FIT THE GAUSSIANS USING THE EM ALGORITHM FOR GMM 
+                
+                if trans == 1: #if we hve transduction
+                    data = np.concatenate((Xtrain[:, ind2], Xtest[:, ind2]), 
+                                                                          axis = 0)
+                    mAll = np.concatenate( (mTrain, mTest ), axis = 0 )
+                
+                else:
+                     data =  Xtrain[:, ind2]
+                     mAll = mTrain
+                   
+                #take the parameters of the GMM models
+                #THIS PIECE OF CODE WILL BE REMOVED IN THE FUTURE
+                params = self.gmmModels( data, mAll, mcov, par )
+                gmmProb = params['probMat']
+                ###################################################################
+                #THIS IS AFTER MODIFICATIONS#######################################
+                if mod == 1: #THIS IS THE MOD WE WILL KEEP IN THE FUTURE
+                    gmmProb = params['probMat2']
+                    gmmLogprob = params['logProb']  
+                    self.Gmms = params['Gmms']
+                    self.mixes = params['pis']
+                #END OF MODIFICATION ##############################################
+                
+               #CALCULATE NEW MEMBERSHIPS FOR TRAIN AND TEST
+                if simple and gate == 0: #NO PREDICTION DRIVEN (MoG + LR + L1)
+                    mNewTrain =  gmmProb[0: dimXtrain, :] + regk
+                    
+                else: #PREDICTION DRIVEN (SGMM)
+                    mNewTrain = logiProb * gmmProb[0: dimXtrain, :] + regk
+                    
+                    simple = 0
+                
+                ###################################################################
+                if trans:
+                    mNewTest = gmmProb[dimXtrain :, :] + regk
+                 
+                #COMPUTE LIKELIHOOD IF COMP_LIK == 1
+                if mod  and comp_Lik:
+                     Qnew, Qdif = self.computeLikelihood( gmmLogprob, logLogist,
+                                        dimXtrain, vb, trans, simple, Qold)
+                     Qold = Qnew
+                #END OF MODIFICATION ##############################################
+                
+                #NORMALIZE NEWMEMBERSHIPS
+                sumTrain = np.sum( mNewTrain, axis = 1)
+                if trans == 1:
+                    sumTest = np.sum( mNewTest, axis = 1 )
+              
+                mNewTrain = ( mNewTrain.T / sumTrain ).T
+                if trans == 1:
+                    mNewTest = ( mNewTest.T / sumTest ).T  
+                    
+                    
+                #EVALUATE ERROR
+                errorTr = np.sum( np.abs( mTrain - mNewTrain) )
+                if trans == 1:
+                    errorTst = np.sum( np.abs( mTest - mNewTest ) )
+                    error = ( errorTr + errorTst )/( (dimXtrain + dimXtest)\
+                                                                 *n_clusters )
+                else:
+                    error = errorTr/( dimXtrain * n_clusters )
+                
+                if (error < 5*10**(-8)) and altern:
+                    gate = 1
+                    altern = 0
+                    
+                #MAKE A SOFT CHANGE IN MEMEBRSHIPS MIXING OLD WITH NEW 
+                #MEMBERSHIPS WITH DEFAULT MIXING OF 0.5
+                mNewTrain = mNewTrain*(1-memb_mix) + \
+                                                self.predict_GMMS(Xtrain)*memb_mix
+                                                
+                mTrain = mNewTrain*(1-mix) + mTrain*(mix)
+                if trans == 1:
+                    mTest = mNewTest*(1-mix) + mTest*(mix)
             
-            if trans == 1: #if we hve transduction
-                data = np.concatenate((Xtrain[:, ind2], Xtest[:, ind2]), 
-                                                                      axis = 0)
-                mAll = np.concatenate( (mTrain, mTest ), axis = 0 )
+                
+                print("GMM iteration: {}, error: {}".format(iter2, error))
+                if error < tol:
+                    
+                     break
+            ############ END OF EM UPDATES #######################################
+           #if simple  and error < tol:
+            models, logiProb, logLogist = self.fitLogisticRegression( 
+                                  n_clusters, mTrain, adaR, alpha, max_iter,
+                                  tol2, Xtrain, ytrain, vb, penalty, scoring,
+                                  cv, regk, ind1, indexing, logiProb, logLogist, 
+                                  param_grid, lg_regr, C,
+                                                      hard_cluster = hard_cluster, 
+                                                      solver = solver, par = par)
             
+            self.Gmms = params['Gmms']
+            self.mixes = params['pis']
+            self.LogRegr = models
+            self.params = params        
+            #TAKING HARD CLUSTERS IN CASE WE WANT TO USE LATER  
+            if trans == 1:
+                testlabels = np.argmax( mTest, axis = 1 )
+                
             else:
-                 data =  Xtrain[:, ind2]
-                 mAll = mTrain
-               
-            #take the parameters of the GMM models
-            #THIS PIECE OF CODE WILL BE REMOVED IN THE FUTURE
-            params = self.gmmModels( data, mAll, mcov )
-            gmmProb = params['probMat']
-            ###################################################################
-            #THIS IS AFTER MODIFICATIONS#######################################
-            if mod == 1: #THIS IS THE MOD WE WILL KEEP IN THE FUTURE
-                gmmProb = params['probMat2']
-                gmmLogprob = params['logProb']  
-                self.Gmms = params['Gmms']
-                self.mixes = params['pis']
-            #END OF MODIFICATION ##############################################
-            
-           #CALCULATE NEW MEMBERSHIPS FOR TRAIN AND TEST
-            if simple and gate == 0: #NO PREDICTION DRIVEN (MoG + LR + L1)
-                mNewTrain =  gmmProb[0: dimXtrain, :] + regk
+                testlabels = []
                 
-            else: #PREDICTION DRIVEN (SGMM)
-                mNewTrain = logiProb * gmmProb[0: dimXtrain, :] + regk
-                
-                simple = 0
+            trainlabels = np.argmax( mTrain, axis = 1 )
+            fitParams = {'mTrain' : mTrain, 'mTest': mTest, 'labTest': testlabels,
+                         'labTrain' : trainlabels }
             
-            ###################################################################
-            if trans:
-                mNewTest = gmmProb[dimXtrain :, :] + regk
-             
-            #COMPUTE LIKELIHOOD IF COMP_LIK == 1
-            if mod  and comp_Lik:
-                 Qnew, Qdif = self.computeLikelihood( gmmLogprob, logLogist,
-                                    dimXtrain, vb, trans, simple, Qold)
-                 Qold = Qnew
-            #END OF MODIFICATION ##############################################
+            self.mTrain = mTrain
             
-            #NORMALIZE NEWMEMBERSHIPS
-            sumTrain = np.sum( mNewTrain, axis = 1)
             if trans == 1:
-                sumTest = np.sum( mNewTest, axis = 1 )
-          
-            mNewTrain = ( mNewTrain.T / sumTrain ).T
-            if trans == 1:
-                mNewTest = ( mNewTest.T / sumTest ).T  
+                self.mTest = mTest
                 
-                
-            #EVALUATE ERROR
-            errorTr = np.sum( np.abs( mTrain - mNewTrain) )
-            if trans == 1:
-                errorTst = np.sum( np.abs( mTest - mNewTest ) )
-                error = ( errorTr + errorTst )/( (dimXtrain + dimXtest)\
-                                                             *n_clusters )
-            else:
-                error = errorTr/( dimXtrain * n_clusters )
+            self.fitParams = fitParams
+            #set the weights of LOGREG MEANS AND COVARIANCES OF GAUSSIANS
+            self.setWeights()
+            self.setGauss( params )
             
-            if (error < 5*10**(-8)) and altern:
-                gate = 1
-                altern = 0
-                
-            #MAKE A SOFT CHANGE IN MEMEBRSHIPS MIXING OLD WITH NEW 
-            #MEMBERSHIPS WITH DEFAULT MIXING OF 0.5
-            mNewTrain = mNewTrain*(1-memb_mix) + \
-                                            self.predict_GMMS(Xtrain)*memb_mix
-                                            
-            mTrain = mNewTrain*(1-mix) + mTrain*(mix)
-            if trans == 1:
-                mTest = mNewTest*(1-mix) + mTest*(mix)
-        
-            
-            print("GMM iteration: {}, error: {}".format(iter2, error))
-            if error < tol:
-                
-                 break
-        ############ END OF EM UPDATES #######################################
-       #if simple  and error < tol:
-        models, logiProb, logLogist = self.fitLogisticRegression( 
-                              n_clusters, mTrain, adaR, alpha, max_iter,
-                              tol2, Xtrain, ytrain, vb, penalty, scoring,
-                              cv, regk, ind1, indexing, logiProb, logLogist, 
-                              param_grid, lg_regr, C,
-                                                  hard_cluster = hard_cluster )
-        
-        self.Gmms = params['Gmms']
-        self.mixes = params['pis']
-        self.LogRegr = models
-        self.params = params        
-        #TAKING HARD CLUSTERS IN CASE WE WANT TO USE LATER  
-        if trans == 1:
-            testlabels = np.argmax( mTest, axis = 1 )
-            
-        else:
-            testlabels = []
-            
-        trainlabels = np.argmax( mTrain, axis = 1 )
-        fitParams = {'mTrain' : mTrain, 'mTest': mTest, 'labTest': testlabels,
-                     'labTrain' : trainlabels }
-        
-        self.mTrain = mTrain
-        
-        if trans == 1:
-            self.mTest = mTest
-            
-        self.fitParams = fitParams
-        #set the weights of LOGREG MEANS AND COVARIANCES OF GAUSSIANS
-        self.setWeights()
-        self.setGauss( params )
-        
-        return self
-        #END OF FIT FUNCTION##################################################
+            return self
+            #END OF FIT FUNCTION##################################################
         
     def initializeMemb( self, warm, kmeans, dimXtrain, n_clusters,
                        regk, trans, dimXtest, Xtrain, Xtest, mTrain1,
@@ -589,7 +595,7 @@ class SupervisedGMM():
     def fitLogisticRegression(self, n_clusters, mTrain, adaR, alpha, max_iter,
                               tol2, Xtrain, ytrain, vb, penalty, scoring,
                               cv, regk, ind1, indexing, logiProb, logLogist,
-                              param_grid, lg_regr, C,  hard_cluster):
+                              param_grid, lg_regr, C,  hard_cluster, solver, par ):
         
         """ FIT LOGISTIC REGRESSION FOR EACH CLUSTER 
             n_clusters: number of gaussians -- clusters
@@ -624,67 +630,92 @@ class SupervisedGMM():
                      
            
             """
-            
+        models = [] 
+        
+        parallel = self._parallel
         mTrain = self.hardCluster( mTrain.copy(), hard_cluster)
-        models = []
-        for clust in np.arange( n_clusters ): #FITLOG REGR
-                #FIT THE L1 LOGISTIC REGRESSION MODEL
-                #CROSS VALIDATION MAXIMIZING BE DEFAULT THE NEGATIVE LOG LIKEHOOD
-                
-                #ADAPTIVE REGULARIZATION
-                Nclus = np.sum( mTrain[:, clust], axis = 0 )
-                if adaR == 1:
-                    if lg_regr == 'SGD':
-                        alphanew = (np.array( alpha ) / Nclus).tolist()
-                        param_grid = {'alpha': alphanew}
-                    else:
-                        
-                        Cnew = (np.array( C ) / Nclus ).tolist()
-                        param_grid = {'C': Cnew}
-                # PRINT SOME INFORMATION  
-                if vb == 1:
-                    #print Cluster Size
-                    print('\n Cluster {} has Size {} of {}'.format( clust,
-                          Nclus, mTrain.shape[0]))
+       
+        if  parallel == 0:
+            for clust in np.arange( n_clusters ): #FITLOG REGR
+                    #FIT THE L1 LOGISTIC REGRESSION MODEL
+                    #CROSS VALIDATION MAXIMIZING BE DEFAULT THE NEGATIVE LOG LIKEHOOD
+                    
+                    #ADAPTIVE REGULARIZATION
+                    Nclus = np.sum( mTrain[:, clust], axis = 0 )
                     if adaR == 1:
                         if lg_regr == 'SGD':
-                            print('alpha is {} alphaNew {}'.format(alpha, alphanew))
+                            alphanew = (np.array( alpha ) / Nclus).tolist()
+                            param_grid = {'alpha': alphanew}
                         else:
-                            print('C is {} CNew {}'.format(C, Cnew))
-       
-                #TRAIN LOGISTIC REGRESSION MODEL
-                if lg_regr == 'SGD':
-                    mf = SGDClassifier(loss = "log", penalty = penalty, 
-                                      n_jobs = -1, max_iter = max_iter,
-                                      random_state = 0, tol = tol2)
-                else:
+                            
+                            Cnew = (np.array( C ) / Nclus ).tolist()
+                            param_grid = {'C': Cnew}
+                    # PRINT SOME INFORMATION  
+                    if vb == 1:
+                        #print Cluster Size
+                        print('\n Cluster {} has Size {} of {}'.format( clust,
+                              Nclus, mTrain.shape[0]))
+                        if adaR == 1:
+                            if lg_regr == 'SGD':
+                                print('alpha is {} alphaNew {}'.format(alpha, alphanew))
+                            else:
+                                print('C is {} CNew {}'.format(C, Cnew))
+           
+                    #TRAIN LOGISTIC REGRESSION MODEL
+                    if lg_regr == 'SGD':
+                        mf = SGDClassifier(loss = "log", penalty = penalty, 
+                                          n_jobs = -1, max_iter = max_iter,
+                                          random_state = 0, tol = tol2)
+                    else:
+                    
+                        mf = LogisticRegression( penalty = penalty, tol = tol2,
+                                                 random_state = 0, solver = solver,
+                                            max_iter = max_iter, n_jobs = -1)
+                     
+                    model = GridSearchCV( mf, param_grid = param_grid, 
+                                      n_jobs = -1, 
+                                      scoring = scoring, cv = cv).\
+                                      fit(Xtrain, ytrain,
+                                          sample_weight = mTrain[:, clust] ) 
+        
+                    #FOR EACH CLUSTER APPEND THE MODEL in MODELS
+                    models.append( model )  
+                   
+                    #PREDICT PROBABILITIES FOR BEING IN CLASS 1 or 0
+                    proba = model.predict_proba( Xtrain[:, ind1] )
+                    #log probabilities
+                    logproba = np.log( proba + regk)
+                    
+                    #FOR EACH DATA POINT TAKE THE PROB ON BEING IN CORRECT CLASS
+                    logiProb[:, clust]  = proba[ indexing, ytrain ] 
+                    logLogist[:, clust] = logproba[ indexing, ytrain]
                 
-                    mf = LogisticRegression( penalty = penalty, tol = tol2,
-                                             random_state = 0, 
-                                        max_iter = max_iter, n_jobs = -1)
-                 
-                model = GridSearchCV( mf, param_grid = param_grid, 
-                                  n_jobs = -1, 
-                                  scoring = scoring, cv = cv).\
-                                  fit(Xtrain, ytrain,
-                                      sample_weight = mTrain[:, clust] ) 
-    
-                #FOR EACH CLUSTER APPEND THE MODEL in MODELS
-                models.append( model )  
                
-                #PREDICT PROBABILITIES FOR BEING IN CLASS 1 or 0
-                proba = model.predict_proba( Xtrain[:, ind1] )
-                #log probabilities
-                logproba = np.log( proba + regk)
+        else: #Parallel Mode
+                models = par(delayed(GridSearchCV(estimator = 
+                                 LogisticRegression(penalty = penalty, tol = tol2,
+                                                    random_state = 0, max_iter = max_iter,
+                                                    n_jobs = -1, solver = solver), 
+                                                    param_grid = param_grid, 
+                                      n_jobs = -1,scoring = scoring, cv = cv).fit)
+                                 (Xtrain, ytrain, 
+                                  sample_weight = mTrain[:, clust] )
+                                             for clust in range(n_clusters))
+                #print(models)
                 
-                #FOR EACH DATA POINT TAKE THE PROB ON BEING IN CORRECT CLASS
-                logiProb[:, clust]  = proba[ indexing, ytrain ] 
-                logLogist[:, clust] = logproba[ indexing, ytrain]
-                
-                ######## END OF CODE FITTING LOGISTIIC REGRESSION ############
+                for clust,  model in enumerate(models):
+                    #PREDICT PROBABILITIES FOR BEING IN CLASS 1 or 0
+                    proba = model.predict_proba( Xtrain[:, ind1] )
+                    #log probabilities
+                    logproba = np.log( proba + regk)
+                    
+                    #FOR EACH DATA POINT TAKE THE PROB ON BEING IN CORRECT CLASS
+                    logiProb[:, clust]  = proba[ indexing, ytrain ] 
+                    logLogist[:, clust] = logproba[ indexing, ytrain]
+                    
+                    
         return models, logiProb, logLogist
-   
-    
+ ######## END OF CODE FITTING LOGISTIIC REGRESSION ############   
 ################ COMPUTE LIKELIHOOD ##########################################    
     def computeLikelihood( self, gmmLogprob, logLogist, dimXtrain, vb, trans,
                                                                 simple, Qold):
@@ -725,7 +756,7 @@ class SupervisedGMM():
            return Qf3, Qdif
 
 ################# #FITTING THE GAUSSIAN MIXTURE MODEL #########################            
-    def gmmModels(self, X, members, mcov ):
+    def gmmModels(self, X, members, mcov, par ):
             
             """
                 Calculates the Mixtures of Gaussians Parameters
@@ -758,25 +789,46 @@ class SupervisedGMM():
             Gmms = []
             #MATRIX WITH THE LOG PROBABILITIES
             logprobaMatrix = np.zeros([X.shape[0], clusters])
+            parallel = self._parallel2
+            
+            if parallel == 0:
+                
+                for cl in np.arange( clusters ):
+                   
+                    # FOR EACH CLUSTER USE THE EM ALGORITHM
+                    # TO CREATE THE NEW MEMBERSHIP MATRIX OF THE GAUSSIANS
+                    #IT IS NOT EXACTLY THE MEMBERSHIP BECAUSE IT IS
+                    # NORMALIZED  AFTER THIS FUNCTION ENDS
+                    covCl, mCl, piCl, logproba, model = self.calcGmmPar( X, 
+                                                                    members[:,cl],
+                                                                    mcov) 
                     
-            for cl in np.arange( clusters ):
-               
-                # FOR EACH CLUSTER USE THE EM ALGORITHM
-                # TO CREATE THE NEW MEMBERSHIP MATRIX OF THE GAUSSIANS
-                #IT IS NOT EXACTLY THE MEMBERSHIP BECAUSE IT IS
-                # NORMALIZED  AFTER THIS FUNCTION ENDS
-                covCl, mCl, piCl, logproba, model = self.calcGmmPar( X, 
-                                                                members[:,cl],
-                                                                mcov) 
+                    #LOG PROBABILITIES FOR EACH CLUSTER
+                    logprobaMatrix[:,cl] = logproba 
+                    
+                    #APPEND GAUSSIAN STATS
+                    cov.append( covCl )
+                    means.append( mCl )
+                    pis.append( piCl )
+                    Gmms.append( model )
+            else:
                 
-                #LOG PROBABILITIES FOR EACH CLUSTER
-                logprobaMatrix[:,cl] = logproba 
-                
-                #APPEND GAUSSIAN STATS
-                cov.append( covCl )
-                means.append( mCl )
-                pis.append( piCl )
-                Gmms.append( model )
+                res = par(delayed(self.calcGmmPar)
+                                            (X, members[:,cl],mcov)
+                                            for cl in range( clusters ))
+                        
+                        
+                for cl, (covCl, mCl, piCl, logproba, model) in enumerate(res):
+                    
+                    #LOG PROBABILITIES FOR EACH CLUSTER
+                    logprobaMatrix[:,cl] = logproba 
+                    
+                    #APPEND GAUSSIAN STATS
+                    cov.append( covCl )
+                    means.append( mCl )
+                    pis.append( piCl )
+                    Gmms.append( model )
+                    
                 
             #FOR EACH DATA POINT FIND THE MAXIMUM LOGPROBABILITY 
             #THIS IS DONE FOR REGULARIZATION PURPOSES
@@ -848,7 +900,13 @@ class SupervisedGMM():
         model  = multivariate_normal( meank.copy(), covk.copy() )
         logproba = model.logpdf(X)  #LOG PROBABILITY cansuisthebestofthebest
         
-        return covk, meank, pk, logproba, model
+        if self._parallel == 0:
+            
+            return covk, meank, pk, logproba, model
+        
+        else:
+            
+            return (covk, meank, pk, logproba, model)
     
     
 ################ SPARSE MEANS FUNCTIONS #######################################
